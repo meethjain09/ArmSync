@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Robotic Arm Command Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    input[type=range]::-webkit-slider-thumb {
+      appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #06b6d4;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans selection:bg-cyan-500 selection:text-black">
+  <div class="max-w-6xl mx-auto p-6 md:p-8 space-y-6">
+    <!-- Header -->
+    <header class="flex flex-col md:flex-row md:items-center justify-between pb-6 border-b border-slate-800 gap-4">
+      <div>
+        <h1 class="text-2xl font-bold text-white flex items-center gap-3">
+          <span>🦾</span> RoboArm Mode Controller
+        </h1>
+        <p class="text-sm text-slate-400">FastAPI Brain &amp; ESP32-CAM Dual-Port Telemetry Bridge</p>
+      </div>
+
+      <!-- Mode Selector -->
+      <div class="flex items-center gap-2 bg-slate-900 border border-slate-800 p-1.5 rounded-xl">
+        <button id="btn-mode-1a" onclick="setMode('1A')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-cyan-500 text-slate-950 transition">
+          Tier 1A: Manual
+        </button>
+        <button id="btn-mode-1b" onclick="setMode('1B')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition">
+          Tier 1B: Sense &amp; Place
+        </button>
+        <button id="btn-mode-1c" onclick="setMode('1C')" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition">
+          Tier 1C: CV Vision
+        </button>
+      </div>
+    </header>
+
+    <!-- Status & Video Grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- Live Video Feed (Port 81) -->
+      <div class="lg:col-span-2 bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden flex flex-col">
+        <div class="px-5 py-3 border-b border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2 text-sm font-semibold text-slate-200">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            ESP32-CAM Live Feed (Port 81)
+          </div>
+          <span id="cam-status" class="text-xs font-mono text-slate-400">Connecting...</span>
+        </div>
+        <div class="relative bg-black flex-1 min-h-[360px] flex items-center justify-center">
+          <img id="mjpeg-stream" src="http://192.168.1.100:81/stream" alt="ESP32 Stream" class="max-h-[440px] w-full object-contain" onerror="this.style.display='none'; document.getElementById('cam-fallback').style.display='flex';" onload="this.style.display='block'; document.getElementById('cam-fallback').style.display='none';" />
+          <div id="cam-fallback" class="hidden absolute inset-0 flex flex-col items-center justify-center text-slate-500 text-xs space-y-2 p-6 text-center">
+            <span class="text-3xl">📹</span>
+            <p>Awaiting video stream on <code class="text-cyan-400">http://&lt;ESP32_IP&gt;:81/stream</code></p>
+            <p class="text-[11px] text-slate-600">Ensure the ESP32 is powered and connected to the same local network.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Telemetry & Health Panel -->
+      <div class="space-y-6">
+        <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 space-y-4">
+          <h2 class="text-sm font-semibold uppercase tracking-wider text-cyan-400">System Telemetry</h2>
+          
+          <div class="grid grid-cols-2 gap-3">
+            <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+              <span class="text-xs text-slate-400">Ultrasonic Distance</span>
+              <div class="text-2xl font-bold font-mono text-white mt-1">
+                <span id="val-distance">--</span> <span class="text-xs text-slate-400 font-normal">cm</span>
+              </div>
+            </div>
+
+            <div class="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+              <span class="text-xs text-slate-400">ESP32 Status</span>
+              <div class="text-lg font-bold font-mono text-emerald-400 mt-1 capitalize" id="val-status">
+                --
+              </div>
+            </div>
+          </div>
+
+          <div class="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs space-y-1.5">
+            <div class="flex justify-between">
+              <span class="text-slate-400">Active Mode:</span>
+              <span id="display-mode" class="font-bold text-cyan-300">Tier 1A (Manual)</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-400">WebSocket Bridge:</span>
+              <span id="ws-bridge-status" class="font-bold text-emerald-400">Connecting...</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-400">Sequence Running:</span>
+              <span id="display-sequence" class="font-bold text-slate-300">No</span>
+            </div>
+          </div>
+
+          <!-- E-Stop Button -->
+          <button onclick="triggerEStop()" class="w-full py-4 bg-rose-600 hover:bg-rose-500 active:bg-rose-700 text-white font-bold rounded-xl tracking-wider uppercase text-sm shadow-lg shadow-rose-950 transition flex items-center justify-center gap-2">
+            🛑 EMERGENCY STOP (E-STOP)
+          </button>
+        </div>
+
+        <!-- Activity Log -->
+        <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-4">
+          <span class="text-xs font-semibold uppercase text-slate-400">Reflex / Event Log</span>
+          <div id="event-log" class="mt-2 h-36 bg-black/60 rounded-xl p-3 font-mono text-[11px] text-slate-300 overflow-y-auto space-y-1">
+            <div class="text-slate-500">System ready. Waiting for events...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Manual Joint Control (Tier 1A) -->
+    <div id="manual-controls" class="bg-slate-900/90 border border-slate-800 rounded-2xl p-6">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="text-base font-semibold text-white">4-DOF Joint Controls (Tier 1A)</h2>
+          <p class="text-xs text-slate-400">Interactive joint sliders dispatched over WebSocket (Port 82)</p>
+        </div>
+        <button onclick="resetHomePose()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs rounded-lg text-slate-200 font-medium transition">
+          Center Neutral (90°)
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <!-- Joint 1: Base -->
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+          <div class="flex justify-between text-xs font-medium">
+            <span class="text-slate-300">Base (GPIO 12)</span>
+            <span id="label-base" class="font-mono text-cyan-400 font-bold">90°</span>
+          </div>
+          <input type="range" id="slider-base" min="0" max="180" value="90" oninput="onSliderChange()" class="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer">
+        </div>
+
+        <!-- Joint 2: Shoulder -->
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+          <div class="flex justify-between text-xs font-medium">
+            <span class="text-slate-300">Shoulder (GPIO 13)</span>
+            <span id="label-shoulder" class="font-mono text-cyan-400 font-bold">90°</span>
+          </div>
+          <input type="range" id="slider-shoulder" min="0" max="180" value="90" oninput="onSliderChange()" class="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer">
+        </div>
+
+        <!-- Joint 3: Elbow -->
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+          <div class="flex justify-between text-xs font-medium">
+            <span class="text-slate-300">Elbow (GPIO 14)</span>
+            <span id="label-elbow" class="font-mono text-cyan-400 font-bold">90°</span>
+          </div>
+          <input type="range" id="slider-elbow" min="0" max="180" value="90" oninput="onSliderChange()" class="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer">
+        </div>
+
+        <!-- Joint 4: Gripper -->
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+          <div class="flex justify-between text-xs font-medium">
+            <span class="text-slate-300">Gripper (GPIO 15)</span>
+            <span id="label-gripper" class="font-mono text-cyan-400 font-bold">90°</span>
+          </div>
+          <input type="range" id="slider-gripper" min="0" max="180" value="90" oninput="onSliderChange()" class="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let socket = null;
+    let currentMode = "1A";
+
+    function logEvent(msg) {
+      const container = document.getElementById("event-log");
+      const el = document.createElement("div");
+      el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      container.appendChild(el);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function initWebSocket() {
+      const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+      
+      socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        document.getElementById("ws-bridge-status").textContent = "Connected";
+        document.getElementById("ws-bridge-status").className = "font-bold text-emerald-400";
+        logEvent("Connected to FastAPI WebSocket bridge.");
+      };
+
+      socket.onclose = () => {
+        document.getElementById("ws-bridge-status").textContent = "Reconnecting...";
+        document.getElementById("ws-bridge-status").className = "font-bold text-amber-400";
+        setTimeout(initWebSocket, 2000);
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          if (data.type === "TELEMETRY" && data.esp32) {
+            if (data.esp32.distance_cm !== undefined && data.esp32.distance_cm !== null) {
+              document.getElementById("val-distance").textContent = data.esp32.distance_cm.toFixed(1);
+            }
+            if (data.esp32.status) {
+              document.getElementById("val-status").textContent = data.esp32.status;
+            }
+            if (data.is_executing_sequence !== undefined) {
+              document.getElementById("display-sequence").textContent = data.is_executing_sequence ? "YES (Active)" : "No";
+              document.getElementById("display-sequence").className = data.is_executing_sequence ? "font-bold text-amber-400 animate-pulse" : "font-bold text-slate-300";
+            }
+          }
+
+          if (data.event === "SEQUENCE_STARTED") {
+            logEvent("⚡ Auto Sense & Place routine initiated!");
+          } else if (data.event === "SEQUENCE_STEP") {
+            logEvent(`Step ${data.step_index}: ${data.step_name}`);
+          } else if (data.event === "SEQUENCE_COMPLETED") {
+            logEvent("✅ Sense & Place routine finished successfully.");
+          } else if (data.type === "ESTOP_TRIGGERED") {
+            logEvent("🚨 EMERGENCY STOP ACTIVATED!");
+          } else if (data.type === "MODE_CHANGE") {
+            updateModeUI(data.active_mode);
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      };
+    }
+
+    function setMode(mode) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ command: "SET_MODE", mode: mode }));
+      }
+      updateModeUI(mode);
+    }
+
+    function updateModeUI(mode) {
+      currentMode = mode;
+      const modes = ["1A", "1B", "1C"];
+      modes.forEach(m => {
+        const btn = document.getElementById(`btn-mode-${m.toLowerCase()}`);
+        if (m === mode) {
+          btn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-cyan-500 text-slate-950 transition";
+        } else {
+          btn.className = "px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition";
+        }
+      });
+
+      const modeNames = {
+        "1A": "Tier 1A (Manual Teleop)",
+        "1B": "Tier 1B (Sense & Place)",
+        "1C": "Tier 1C (Computer Vision)"
+      };
+      document.getElementById("display-mode").textContent = modeNames[mode] || mode;
+
+      const manualPanel = document.getElementById("manual-controls");
+      if (mode === "1A") {
+        manualPanel.style.opacity = "1";
+        manualPanel.style.pointerEvents = "auto";
+      } else {
+        manualPanel.style.opacity = "0.5";
+        manualPanel.style.pointerEvents = "none";
+      }
+      logEvent(`Operating mode switched to ${modeNames[mode]}`);
+    }
+
+    function onSliderChange() {
+      const base = parseInt(document.getElementById("slider-base").value);
+      const shoulder = parseInt(document.getElementById("slider-shoulder").value);
+      const elbow = parseInt(document.getElementById("slider-elbow").value);
+      const gripper = parseInt(document.getElementById("slider-gripper").value);
+
+      document.getElementById("label-base").textContent = `${base}°`;
+      document.getElementById("label-shoulder").textContent = `${shoulder}°`;
+      document.getElementById("label-elbow").textContent = `${elbow}°`;
+      document.getElementById("label-gripper").textContent = `${gripper}°`;
+
+      if (socket && socket.readyState === WebSocket.OPEN && currentMode === "1A") {
+        socket.send(JSON.stringify({
+          command: "MOVE",
+          base: base,
+          shoulder: shoulder,
+          elbow: elbow,
+          gripper: gripper
+        }));
+      }
+    }
+
+    function resetHomePose() {
+      ["base", "shoulder", "elbow", "gripper"].forEach(joint => {
+        document.getElementById(`slider-${joint}`).value = 90;
+      });
+      onSliderChange();
+    }
+
+    function triggerEStop() {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ command: "STOP" }));
+      }
+    }
+
+    window.onload = initWebSocket;
+  </script>
+</body>
+</html>
