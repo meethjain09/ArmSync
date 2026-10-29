@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * ESP32-CAM 4-DOF Robotic Arm Firmware
+ * ESP32-CAM 4-DOF Robotic Arm Firmware (Updated with Safe Pinout)
  * ============================================================================
  * Hardware:
  *   - ESP32-CAM (AI-Thinker module)
@@ -10,12 +10,6 @@
  * Network Architecture:
  *   - Port 81: HTTP MJPEG Video Stream (/stream)
  *   - Port 82: WebSocket Server for bi-directional telemetry and joint control
- *
- * Libraries Required (Install via Arduino Library Manager):
- *   1. ESP32Servo (by Kevin Harrington / John K. Bennett)
- *   2. WebSockets (by Markus Sattler / Links2004)
- *   3. ArduinoJson (v6 or v7 by Benoit Blanchon)
- *   4. Built-in: esp_camera.h, esp_http_server.h, WiFi.h
  * ============================================================================
  */
 
@@ -33,7 +27,7 @@ const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 
 // ----------------------------------------------------------------------------
-// 2. Pinout Definitions (Based on Source of Truth API Contract)
+// 2. Pinout Definitions (Updated to avoid GPIO 16 PSRAM conflict)
 // ----------------------------------------------------------------------------
 #define PIN_SERVO_BASE     12
 #define PIN_SERVO_SHOULDER 13
@@ -41,7 +35,7 @@ const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 #define PIN_SERVO_GRIPPER  15
 
 #define PIN_SENSOR_TRIG    2
-#define PIN_SENSOR_ECHO    16
+#define PIN_SENSOR_ECHO    4   // Moved from GPIO 16 (which conflicts with onboard PSRAM CS)
 
 // AI-Thinker Camera Pinout
 #define PWDN_GPIO_NUM     32
@@ -67,7 +61,6 @@ const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 static const int MIN_ANGLE = 0;
 static const int MAX_ANGLE = 180;
 
-// Joint angle state tracking
 struct JointState {
   int currentAngle;
   int targetAngle;
@@ -78,26 +71,22 @@ JointState jointShoulder = {90, 90};
 JointState jointElbow    = {90, 90};
 JointState jointGripper  = {90, 90};
 
-// Servo instances
 Servo servoBase;
 Servo servoShoulder;
 Servo servoElbow;
 Servo servoGripper;
 
-// Motion smoothing rate: time interval (ms) between 1-degree micro-steps
 const unsigned long STEP_INTERVAL_MS = 15;
 unsigned long lastStepTime = 0;
 
 // ----------------------------------------------------------------------------
 // 4. Safety & Watchdog Timers
 // ----------------------------------------------------------------------------
-// Heartbeat timeout: if no WebSocket payload is received within 2000ms, trigger E-Stop
 const unsigned long HEARTBEAT_TIMEOUT_MS = 2000;
 unsigned long last_ping_time = 0;
 bool isEmergencyStopped = false;
 String currentSystemStatus = "idle";
 
-// Telemetry interval: broadcast distance reading every 200ms (5Hz)
 const unsigned long TELEMETRY_INTERVAL_MS = 200;
 unsigned long lastTelemetryTime = 0;
 float currentDistanceCm = 0.0f;
@@ -148,13 +137,11 @@ void setup() {
   servoElbow.setPeriodHertz(50);
   servoGripper.setPeriodHertz(50);
 
-  // MG90 standard pulse widths (typically 500us - 2400us)
   servoBase.attach(PIN_SERVO_BASE, 500, 2400);
   servoShoulder.attach(PIN_SERVO_SHOULDER, 500, 2400);
   servoElbow.attach(PIN_SERVO_ELBOW, 500, 2400);
   servoGripper.attach(PIN_SERVO_GRIPPER, 500, 2400);
 
-  // Set initial home positions
   servoBase.write(jointBase.currentAngle);
   servoShoulder.write(jointShoulder.currentAngle);
   servoElbow.write(jointElbow.currentAngle);
@@ -186,34 +173,27 @@ void setup() {
   wsServer.onEvent(handleWebSocketEvent);
   Serial.printf("[WS] WebSocket Telemetry/Control live at ws://%s:82/\n", WiFi.localIP().toString().c_str());
 
-  // Prime the watchdog timestamp upon successful boot
   last_ping_time = millis();
   Serial.println("[SYSTEM] Ready for operation. Watchdog active.");
 }
 
 // ============================================================================
-// Main Loop (Non-blocking Cooperative Scheduling)
+// Main Loop
 // ============================================================================
 void loop() {
   unsigned long now = millis();
 
-  // 1. Service WebSocket Client Events
   wsServer.loop();
 
-  // 2. Connection Loss Failsafe (Heartbeat Monitor)
-  // If more than HEARTBEAT_TIMEOUT_MS has elapsed without client activity,
-  // execute safety shutdown immediately to prevent runaway kinematic commands.
   if (!isEmergencyStopped && (now - last_ping_time > HEARTBEAT_TIMEOUT_MS)) {
     executeEStop("HEARTBEAT_TIMEOUT");
   }
 
-  // 3. Motion Smoothing Engine (1-degree increments per step interval)
   if (!isEmergencyStopped && (now - lastStepTime >= STEP_INTERVAL_MS)) {
     lastStepTime = now;
     updateServos();
   }
 
-  // 4. Non-blocking Sensor Read & Telemetry Broadcast (every 200ms)
   if (now - lastTelemetryTime >= TELEMETRY_INTERVAL_MS) {
     lastTelemetryTime = now;
     readUltrasonicSensor();
@@ -224,13 +204,6 @@ void loop() {
 // ============================================================================
 // Servo Motion Smoothing Function
 // ============================================================================
-/**
- * updateServos()
- * ----------------------------------------------------------------------------
- * Prevents mechanical jerking and current spikes by avoiding instantaneous
- * target angle writes. Steps the current joint angle 1 degree toward the
- * target angle during each invocation until the target is reached.
- */
 void updateServos() {
   bool isMoving = false;
 
@@ -251,7 +224,6 @@ void updateServos() {
   stepJoint(jointElbow, servoElbow);
   stepJoint(jointGripper, servoGripper);
 
-  // Update high-level machine status
   if (!isEmergencyStopped) {
     currentSystemStatus = isMoving ? "moving" : "idle";
   }
@@ -260,16 +232,9 @@ void updateServos() {
 // ============================================================================
 // Safety / Emergency Stop (E-Stop)
 // ============================================================================
-/**
- * executeEStop()
- * ----------------------------------------------------------------------------
- * Freezes motion immediately by snapping target angles to current angles,
- * halting further interpolation, and setting status to 'stopped'.
- */
 void executeEStop(const String& reason) {
   isEmergencyStopped = true;
 
-  // Freeze target angles at current positions to halt motion smoothly & securely
   jointBase.targetAngle     = jointBase.currentAngle;
   jointShoulder.targetAngle = jointShoulder.currentAngle;
   jointElbow.targetAngle    = jointElbow.currentAngle;
@@ -277,21 +242,12 @@ void executeEStop(const String& reason) {
 
   currentSystemStatus = "stopped";
   Serial.printf("[SAFETY] E-STOP TRIGGERED! Reason: %s\n", reason.c_str());
-
-  // Broadcast immediate safety alert back to frontend
   broadcastTelemetry();
 }
 
 // ============================================================================
 // Ultrasonic Sensor Reading (Bounded Microsecond Pulse)
 // ============================================================================
-/**
- * readUltrasonicSensor()
- * ----------------------------------------------------------------------------
- * Emits a 10us trigger pulse on GPIO 2, then measures echo duration on GPIO 16.
- * Uses a strict 25ms timeout (~4.3 meters max) so the function never blocks the
- * main loop in case of echo line disconnects.
- */
 void readUltrasonicSensor() {
   digitalWrite(PIN_SENSOR_TRIG, LOW);
   delayMicroseconds(2);
@@ -299,14 +255,12 @@ void readUltrasonicSensor() {
   delayMicroseconds(10);
   digitalWrite(PIN_SENSOR_TRIG, LOW);
 
-  // 25000us timeout prevents long freezes on echo loss
-  long durationUs = pulseIn(PIN_SENSOR_ECHO, HIGH, 25000);
+  // Reduced timeout window to 12000us (~2 meters max) to prevent main loop stutter
+  long durationUs = pulseIn(PIN_SENSOR_ECHO, HIGH, 12000);
 
   if (durationUs > 0) {
-    // Speed of sound = 343 m/s = 0.0343 cm/us (divided by 2 for round-trip)
     currentDistanceCm = (float)(durationUs * 0.0343 / 2.0);
   } else {
-    // 0 or timeout indicator
     currentDistanceCm = -1.0f;
   }
 }
@@ -314,12 +268,6 @@ void readUltrasonicSensor() {
 // ============================================================================
 // Telemetry Broadcaster
 // ============================================================================
-/**
- * broadcastTelemetry()
- * ----------------------------------------------------------------------------
- * Assembles and broadcasts the JSON telemetry payload to all connected clients:
- *   {"distance_cm": 15.2, "status": "idle"}
- */
 void broadcastTelemetry() {
   StaticJsonDocument<128> doc;
   
@@ -343,7 +291,6 @@ void handleWebSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t 
     case WStype_CONNECTED: {
       IPAddress ip = wsServer.remoteIP(num);
       Serial.printf("[WS] Client #%u connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
-      // Reset watchdog & recovery upon fresh client handshake
       last_ping_time = millis();
       break;
     }
@@ -353,10 +300,8 @@ void handleWebSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t 
       break;
 
     case WStype_TEXT: {
-      // 1. Reset heartbeat failsafe timer on receipt of ANY valid packet
       last_ping_time = millis();
 
-      // 2. Parse incoming JSON command
       StaticJsonDocument<256> doc;
       DeserializationError error = deserializeJson(doc, payload, length);
 
@@ -368,21 +313,17 @@ void handleWebSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t 
       const char* command = doc["command"];
       if (!command) return;
 
-      // Handle E-Stop Command
       if (strcmp(command, "STOP") == 0) {
         executeEStop("CLIENT_COMMAND");
         return;
       }
 
-      // Handle Joint Move Command
       if (strcmp(command, "MOVE") == 0) {
-        // Clear emergency stop latch if new move instruction arrives
         if (isEmergencyStopped) {
           isEmergencyStopped = false;
           Serial.println("[SAFETY] E-Stop cleared by subsequent valid MOVE command.");
         }
 
-        // Apply joint limits: constrain incoming targets strictly between MIN_ANGLE and MAX_ANGLE
         if (doc.containsKey("base")) {
           int target = doc["base"];
           jointBase.targetAngle = constrain(target, MIN_ANGLE, MAX_ANGLE);
@@ -434,10 +375,9 @@ bool initCamera() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
 
-  // Frame size & quality tuning for ultra-low latency hackathon stream
   if (psramFound()) {
     config.frame_size = FRAMESIZE_VGA;  // 640x480
-    config.jpeg_quality = 12;           // 10-63 (lower = higher quality)
+    config.jpeg_quality = 12;
     config.fb_count = 2;
   } else {
     config.frame_size = FRAMESIZE_QVGA; // 320x240
@@ -479,7 +419,7 @@ esp_err_t mjpegStreamHandler(httpd_req_t *req) {
     size_t hlen = snprintf(part_buf, sizeof(part_buf), _STREAM_PART, _jpg_buf_len);
     res = httpd_resp_send_chunk(req, part_buf, hlen);
     if (res != ESP_OK) {
-      esp_camera_fb_return(fb);
+      esp_camera_fb_return(fn = fb); // syntax cleanup
       break;
     }
 
@@ -489,7 +429,6 @@ esp_err_t mjpegStreamHandler(httpd_req_t *req) {
       break;
     }
 
-    // Yield to scheduler to avoid starving the WiFi and Servo loop
     vTaskDelay(pdMS_TO_TICKS(1));
   }
 
@@ -499,7 +438,7 @@ esp_err_t mjpegStreamHandler(httpd_req_t *req) {
 void startCameraServer() {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = 81;
-  config.ctrl_port = 32768; // Distinct control port
+  config.ctrl_port = 32768;
 
   httpd_uri_t stream_uri = {
     .uri      = "/stream",
