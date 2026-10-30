@@ -31,9 +31,11 @@ import websockets
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("RoboArmBrain")
 
-ESP32_HOST = os.getenv("ESP32_HOST", "192.168.1.100")
-ESP32_WS_PORT = int(os.getenv("ESP32_WS_PORT", "82"))
-ESP32_WS_URL = f"ws://{ESP32_HOST}:{ESP32_WS_PORT}/"
+# Dual-Board Topology:
+# MUSCLE_HOST / ESP8266_HOST: Drives servos & sensor via WebSocket (Port 82)
+MUSCLE_HOST = os.getenv("ESP8266_HOST", os.getenv("ESP32_HOST", "192.168.1.100"))
+MUSCLE_WS_PORT = int(os.getenv("ESP8266_WS_PORT", os.getenv("ESP32_WS_PORT", "82")))
+ESP32_WS_URL = f"ws://{MUSCLE_HOST}:{MUSCLE_WS_PORT}/"
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
