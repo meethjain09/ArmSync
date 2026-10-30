@@ -279,6 +279,31 @@ async def set_system_mode(req: ModeRequest):
     })
     return {"status": "success", "active_mode": state.active_mode}
 
+@app.post("/api/move")
+async def manual_or_cv_move(payload: dict):
+    """Direct kinematic move endpoint used by vision_sorter and external scripts."""
+    if state.latest_esp32_status == "stopped":
+        return JSONResponse(status_code=400, content={"error": "E-Stop is currently engaged"})
+    
+    success = await send_to_esp32(payload)
+    await broadcast_to_frontends({
+        "type": "MOVE_DISPATCHED",
+        "payload": payload
+    })
+    return {"status": "dispatched" if success else "queued"}
+
+@app.get("/api/sort-logs")
+async def get_sort_logs():
+    """Returns the persistent sorting history."""
+    log_file = os.path.join(os.path.dirname(__file__), "logs", "sort_log.json")
+    if os.path.exists(log_file):
+        try:
+            with open(log_file, "r") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
 @app.post("/api/estop")
 async def emergency_stop():
     """High-priority REST emergency stop endpoint."""
