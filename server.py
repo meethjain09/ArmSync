@@ -20,6 +20,7 @@ from typing import Set, Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -32,10 +33,22 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("RoboArmBrain")
 
 # Dual-Board Topology:
-# MUSCLE_HOST / ESP8266_HOST: Drives servos & sensor via WebSocket (Port 82)
-MUSCLE_HOST = os.getenv("ESP8266_HOST", os.getenv("ESP32_HOST", "192.168.1.100"))
-MUSCLE_WS_PORT = int(os.getenv("ESP8266_WS_PORT", os.getenv("ESP32_WS_PORT", "82")))
-ESP32_WS_URL = f"ws://{MUSCLE_HOST}:{MUSCLE_WS_PORT}/"
+# MUSCLE_HOST / ESP32_HOST: Local IP or Ngrok domain (e.g. abc-xyz.ngrok-free.app or 192.168.1.101)
+raw_host = os.getenv("ESP32_HOST", os.getenv("ESP8266_HOST", "192.168.1.100")).strip()
+MUSCLE_WS_PORT = os.getenv("ESP32_WS_PORT", os.getenv("ESP8266_WS_PORT", "82"))
+
+# Intelligent URL builder: Supports direct IP addresses as well as secure Ngrok tunnels
+if raw_host.startswith("ws://") or raw_host.startswith("wss://"):
+    ESP32_WS_URL = raw_host
+elif "ngrok" in raw_host or "loca.lt" in raw_host or "trycloudflare.com" in raw_host:
+    # Tunnel domains forward over secure wss:// without a port suffix
+    clean_host = raw_host.replace("https://", "").replace("http://", "").strip("/")
+    ESP32_WS_URL = f"wss://{clean_host}/"
+else:
+    clean_host = raw_host.replace("http://", "").replace("https://", "").strip("/")
+    ESP32_WS_URL = f"ws://{clean_host}:{MUSCLE_WS_PORT}/"
+
+logger.info(f"[CONFIG] Target Hardware WebSocket URL configured as: {ESP32_WS_URL}")
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
@@ -242,10 +255,29 @@ async def lifespan(app: FastAPI):
     logger.info("[LIFESPAN] Server shutdown complete.")
 
 app = FastAPI(title="RoboArm FastAPI Brain", lifespan=lifespan)
+ 
+# Mount full CORS Middleware for cross-origin Render / web client WebSocket handshakes
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # -----------------------------------------------------------------------------
-# REST Endpoints for Mode Configuration
+# REST Endpoints for Health & Configuration
 # -----------------------------------------------------------------------------
+@app.get("/api/health")
+async def health_check():
+    """Render zero-downtime deployment health check endpoint."""
+    return {
+        "status": "healthy",
+        "service": "roboarm-backend",
+        "esp32_connected": state.esp32_connected,
+        "active_mode": state.active_mode
+    }
+
 class ModeRequest(BaseModel):
     mode: str
 
@@ -391,8 +423,11 @@ async def serve_index():
     })
 
 # -----------------------------------------------------------------------------
-# Local Dev Entry Point
+# Local Dev & Cloud Entry Point
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    # Render assigns dynamic port via $PORT (Render defaults to 10000, local dev defaults to 8000)
+    port = int(os.environ.get("PORT", 8000))
+    logger.info(f"[BOOT] Starting Uvicorn on 0.0.0.0:{port}...")
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)

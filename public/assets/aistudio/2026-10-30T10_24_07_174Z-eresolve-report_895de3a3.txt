@@ -1,0 +1,33 @@
+'Log files:
+C:\Users\MJ\AppData\Local\npm-cache\_logs\2026-10-30T10_24_07_174Z-debug-0.log
+
+# npm resolution error report
+
+Found: esbuild@0.25.12
+node_modules/esbuild
+  dev esbuild@"^0.25.0" from the root project
+
+Could not resolve dependency:
+peerOptional esbuild@"^0.27.0 || ^0.28.0" from vite@8.3.5
+node_modules/vite
+  vite@"^8.3.0" from the root project
+  peer vite@"^5.2.0 || ^6 || ^7 || ^8" from @tailwindcss/vite@4.3.3
+  node_modules/@tailwindcss/vite
+    @tailwindcss/vite@"^4.3.3" from the root project
+  peer vite@"^8.0.0" from @vitejs/plugin-react@6.1.2
+  node_modules/@vitejs/plugin-react
+    @vitejs/plugin-react@"^6.1.1" from the root project
+
+Conflicting peer dependency: esbuild@0.28.2
+node_modules/tsx/node_modules/esbuild
+  peerOptional esbuild@"^0.27.0 || ^0.28.0" from vite@8.3.5
+  node_modules/vite
+    vite@"^8.3.0" from the root project
+    peer vite@"^5.2.0 || ^6 || ^7 || ^8" from @tailwindcss/vite@4.3.3
+    node_modules/@tailwindcss/vite
+      @tailwindcss/vite@"^4.3.3" from the root project
+    peer vite@"^8.0.0" from @vitejs/plugin-react@6.1.2
+    node_modules/@vitejs/plugin-react
+      @vitejs/plugin-react@"^6.1.1" from the root project
+
+Fix the upstream dependency conflict, or retry this command with --force or --legacy-peer-deps to accept an incorrect (and potentially broken) dependency resolution.

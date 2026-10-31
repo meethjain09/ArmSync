@@ -64,12 +64,19 @@ export default function App() {
     localStorage.setItem('roboarm_theme', nextTheme);
   };
 
-  // Connection & Hardware Configuration
+  // Connection & Cloud Configuration (Vite env vars + localStorage fallback)
+  const defaultCamUrl = (import.meta.env.VITE_CAM_URL as string) || '';
+  const defaultWsBackend = (import.meta.env.VITE_WS_BACKEND_URL as string) || (
+    typeof window !== 'undefined'
+      ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:8000/ws`
+      : 'ws://localhost:8000/ws'
+  );
+
   const [esp32Ip, setEsp32Ip] = useState<string>(() => {
-    return localStorage.getItem('roboarm_esp32_ip') || '192.168.1.100';
+    return localStorage.getItem('roboarm_esp32_ip') || defaultCamUrl || '';
   });
   const [backendWsUrl, setBackendWsUrl] = useState<string>(() => {
-    return localStorage.getItem('roboarm_backend_ws') || 'ws://localhost:8000/ws';
+    return localStorage.getItem('roboarm_backend_ws') || defaultWsBackend;
   });
   const [showConfig, setShowConfig] = useState(false);
 
@@ -425,8 +432,21 @@ export default function App() {
     }
   };
 
-  // Video URL generator
-  const videoStreamUrl = `http://${esp32Ip}:81/stream?key=${streamKey}`;
+  // Video URL generator (Auto-detects full HTTPS/Ngrok URLs or raw IPs)
+  const buildVideoUrl = (rawTarget: string, key: number): string | null => {
+    if (!rawTarget) return null;
+    const trimmed = rawTarget.trim();
+    if (!trimmed) return null;
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      const url = trimmed.endsWith('/stream') ? trimmed : `${trimmed.replace(/\/+$/, '')}/stream`;
+      return `${url}?key=${key}`;
+    }
+    // Protocol matching: default to secure https if client is on HTTPS, else http
+    const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'https:' : 'http:';
+    return `${protocol}//${trimmed}:81/stream?key=${key}`;
+  };
+
+  const videoStreamUrl = buildVideoUrl(esp32Ip, streamKey);
 
   // ---------------------------------------------------------------------------
   // Simulation Helpers for Hackathon Testing / Demo
@@ -702,13 +722,13 @@ export default function App() {
                 isLight ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'
               }`}
             >
-              <span className="font-medium">ESP32 IP (Port 81):</span>
+              <span className="font-medium">ESP32-CAM (Port 81 / Ngrok):</span>
               <input
                 type="text"
                 value={esp32Ip}
                 onChange={(e) => handleSaveIp(e.target.value)}
-                placeholder="192.168.1.100"
-                className={`border rounded-lg px-2.5 py-1 font-mono font-semibold outline-none w-36 text-xs transition ${
+                placeholder="https://abc.ngrok-free.app or 192.168.1.100"
+                className={`border rounded-lg px-2.5 py-1 font-mono font-semibold outline-none w-52 text-xs transition ${
                   isLight
                     ? 'bg-white border-slate-300 text-sky-700 focus:border-sky-500'
                     : 'bg-black/60 border-white/15 text-cyan-300 focus:border-cyan-400'
@@ -721,13 +741,13 @@ export default function App() {
                 isLight ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'
               }`}
             >
-              <span className="font-medium">FastAPI WS Bridge:</span>
+              <span className="font-medium">FastAPI WS (Render / Local):</span>
               <input
                 type="text"
                 value={backendWsUrl}
                 onChange={(e) => handleSaveBackendWs(e.target.value)}
-                placeholder="ws://localhost:8000/ws"
-                className={`border rounded-lg px-2.5 py-1 font-mono font-semibold outline-none w-56 text-xs transition ${
+                placeholder="wss://roboarm-backend.onrender.com/ws/client"
+                className={`border rounded-lg px-2.5 py-1 font-mono font-semibold outline-none w-64 text-xs transition ${
                   isLight
                     ? 'bg-white border-slate-300 text-sky-700 focus:border-sky-500'
                     : 'bg-black/60 border-white/15 text-cyan-300 focus:border-cyan-400'
@@ -749,6 +769,10 @@ export default function App() {
               <RefreshCw className="w-3.5 h-3.5" />
               <span>Reconnect &amp; Refresh Video</span>
             </button>
+
+            <span className={`text-[11px] font-mono ${isLight ? 'text-slate-400' : 'text-slate-400'}`}>
+              Render Deploy: <code className="text-cyan-400">render.yaml</code> Blueprint ready
+            </span>
           </div>
         )}
       </header>
@@ -939,23 +963,53 @@ export default function App() {
 
                 {/* Video Container */}
                 <div className="relative bg-black flex-1 min-h-[380px] flex items-center justify-center overflow-hidden group">
-                  <img
-                    key={streamKey}
-                    src={videoStreamUrl}
-                    alt="ESP32-CAM Stream"
-                    onLoad={() => {
-                      setVideoLoaded(true);
-                      setVideoError(false);
-                    }}
-                    onError={() => {
-                      setVideoLoaded(false);
-                      setVideoError(true);
-                    }}
-                    className={`w-full h-full object-contain max-h-[500px] transition-opacity duration-300 ${videoError ? 'hidden' : 'block'}`}
-                  />
+                  {videoStreamUrl ? (
+                    <img
+                      key={streamKey}
+                      src={videoStreamUrl}
+                      alt="ESP32-CAM Stream"
+                      onLoad={() => {
+                        setVideoLoaded(true);
+                        setVideoError(false);
+                      }}
+                      onError={() => {
+                        setVideoLoaded(false);
+                        setVideoError(true);
+                      }}
+                      className={`w-full h-full object-contain max-h-[500px] transition-opacity duration-300 ${videoError ? 'hidden' : 'block'}`}
+                    />
+                  ) : (
+                    <div
+                      className={`absolute inset-0 flex flex-col items-center justify-center text-center p-6 space-y-3 backdrop-blur-md ${
+                        isLight ? 'bg-slate-100/95' : 'bg-[#0B0F19]/95'
+                      }`}
+                    >
+                      <div className={`p-4 rounded-3xl border ${isLight ? 'bg-white border-slate-200 text-slate-400' : 'bg-white/5 border-white/10 text-slate-500'}`}>
+                        <VideoOff className="w-8 h-8" />
+                      </div>
+                      <div className="space-y-1">
+                        <p className={`text-sm font-semibold ${isLight ? 'text-slate-800' : 'text-slate-200'}`}>
+                          No Camera Stream Configured
+                        </p>
+                        <p className={`text-xs max-w-sm ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+                          Set the ESP32-CAM IP or Stream URL in hardware settings to connect the live MJPEG feed.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setShowConfig(true)}
+                        className={`px-4 py-2 border rounded-xl text-xs font-semibold transition cursor-pointer shadow-sm ${
+                          isLight
+                            ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'
+                            : 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/30'
+                        }`}
+                      >
+                        Open Hardware Config
+                      </button>
+                    </div>
+                  )}
 
                   {/* Fallback Screen if offline */}
-                  {videoError && (
+                  {videoStreamUrl && videoError && (
                     <div
                       className={`absolute inset-0 flex flex-col items-center justify-center text-center p-6 space-y-3 backdrop-blur-md ${
                         isLight ? 'bg-slate-100/95' : 'bg-[#0B0F19]/95'
@@ -992,7 +1046,7 @@ export default function App() {
                   )}
 
                   {/* Targeting Reticle */}
-                  {showCrosshairs && !videoError && (
+                  {showCrosshairs && videoStreamUrl && !videoError && (
                     <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
                       <div className="w-20 h-20 border border-cyan-400/50 rounded-full flex items-center justify-center shadow-[0_0_15px_rgba(6,182,212,0.3)]">
                         <div className="w-2 h-2 bg-cyan-400 rounded-full shadow-[0_0_8px_#38bdf8]" />
@@ -1638,15 +1692,33 @@ export default function App() {
                 </div>
 
                 <div className="relative bg-black flex-1 min-h-[360px] flex items-center justify-center overflow-hidden">
-                  <img
-                    key={`cv-${streamKey}`}
-                    src={videoStreamUrl}
-                    alt="Vision Input"
-                    onError={(e) => {
-                      (e.target as HTMLElement).style.display = 'none';
-                    }}
-                    className="w-full h-full object-contain max-h-[460px]"
-                  />
+                  {videoStreamUrl ? (
+                    <img
+                      key={`cv-${streamKey}`}
+                      src={videoStreamUrl}
+                      alt="Vision Input"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = 'none';
+                      }}
+                      className="w-full h-full object-contain max-h-[460px]"
+                    />
+                  ) : (
+                    <div
+                      className={`absolute inset-0 flex flex-col items-center justify-center text-center p-6 space-y-2 backdrop-blur-md ${
+                        isLight ? 'bg-slate-100/95' : 'bg-[#0B0F19]/95'
+                      }`}
+                    >
+                      <div className={`p-3 rounded-2xl border ${isLight ? 'bg-white border-slate-200 text-slate-400' : 'bg-white/5 border-white/10 text-slate-500'}`}>
+                        <VideoOff className="w-6 h-6" />
+                      </div>
+                      <p className={`text-xs font-semibold ${isLight ? 'text-slate-800' : 'text-slate-200'}`}>
+                        Camera Feed Inactive
+                      </p>
+                      <p className={`text-[11px] max-w-xs ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+                        Connect ESP32-CAM stream to run real-time inference on live camera frames.
+                      </p>
+                    </div>
+                  )}
 
                   {/* Simulated Bounding Box Overlay */}
                   {aiOverlayEnabled && (

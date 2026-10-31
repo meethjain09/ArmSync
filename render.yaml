@@ -1,0 +1,48 @@
+# Render Blueprint Specification (render.yaml)
+# https://render.com/docs/blueprint-spec
+# ==============================================================================
+# Dual-Board Robotic Arm Cloud Architecture
+# - Service 1: Python FastAPI WebSocket Bridge & Brain Server (Web Service)
+# - Service 2: React 19 + Vite Command Dashboard (Static Site)
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. FastAPI WebSocket Brain Server (Backend Web Service)
+  # ----------------------------------------------------------------------------
+  - type: web
+    name: roboarm-backend
+    runtime: python
+    region: oregon
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.12
+      - key: ESP32_HOST
+        sync: false # Set in Render Dashboard to your Ngrok NodeMCU tunnel (e.g. https://xyz.ngrok-free.app)
+      - key: ESP32_WS_PORT
+        value: "82"
+      - key: PORT
+        value: "10000"
+
+  # ----------------------------------------------------------------------------
+  # 2. React Command Center Dashboard (Frontend Static Site)
+  # ----------------------------------------------------------------------------
+  - type: static
+    name: roboarm-dashboard
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
+    autoDeploy: true
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_WS_BACKEND_URL
+        sync: false # Set in Render Dashboard to wss://roboarm-backend.onrender.com/ws/client
+      - key: VITE_CAM_URL
+        sync: false # Set in Render Dashboard to your ESP32-CAM Ngrok tunnel (e.g. https://abc.ngrok-free.app)
