@@ -32,20 +32,17 @@ import websockets
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("RoboArmBrain")
 
-# Dual-Board Topology:
-# MUSCLE_HOST / ESP32_HOST: Local IP or Ngrok domain (e.g. abc-xyz.ngrok-free.app or 192.168.1.101)
-raw_host = os.getenv("ESP32_HOST", os.getenv("ESP8266_HOST", "192.168.1.100")).strip()
-MUSCLE_WS_PORT = os.getenv("ESP32_WS_PORT", os.getenv("ESP8266_WS_PORT", "82"))
+# Dual-Board Topology: Local Hardware Configuration
+# ESP8266_HOST / ESP32_HOST: Local IP of NodeMCU V3 (Kinematics on Port 82)
+raw_host = os.getenv("ESP8266_HOST", os.getenv("ESP32_HOST", "192.168.1.100")).strip()
+MUSCLE_WS_PORT = os.getenv("ESP8266_WS_PORT", os.getenv("ESP32_WS_PORT", "82"))
 
-# Intelligent URL builder: Supports direct IP addresses as well as secure Ngrok tunnels
-if raw_host.startswith("ws://") or raw_host.startswith("wss://"):
-    ESP32_WS_URL = raw_host
-elif "ngrok" in raw_host or "loca.lt" in raw_host or "trycloudflare.com" in raw_host:
-    # Tunnel domains forward over secure wss:// without a port suffix
-    clean_host = raw_host.replace("https://", "").replace("http://", "").strip("/")
-    ESP32_WS_URL = f"wss://{clean_host}/"
+# Clean host for local hardware connection (Port 82)
+clean_host = raw_host.replace("ws://", "").replace("wss://", "").replace("http://", "").replace("https://", "").strip("/")
+if ":" in clean_host:
+    clean_ip, port = clean_host.split(":", 1)
+    ESP32_WS_URL = f"ws://{clean_ip}:{port}/"
 else:
-    clean_host = raw_host.replace("http://", "").replace("https://", "").strip("/")
     ESP32_WS_URL = f"ws://{clean_host}:{MUSCLE_WS_PORT}/"
 
 logger.info(f"[CONFIG] Target Hardware WebSocket URL configured as: {ESP32_WS_URL}")
@@ -343,9 +340,10 @@ async def emergency_stop():
     return {"status": "stopped"}
 
 # -----------------------------------------------------------------------------
-# Frontend WebSocket Endpoint (/ws)
+# Frontend WebSocket Endpoints (/ws and /ws/client)
 # -----------------------------------------------------------------------------
 @app.websocket("/ws")
+@app.websocket("/ws/client")
 async def frontend_websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     state.frontend_clients.add(websocket)
@@ -423,11 +421,11 @@ async def serve_index():
     })
 
 # -----------------------------------------------------------------------------
-# Local Dev & Cloud Entry Point
+# Local Presentation Laptop Server Entry Point (0.0.0.0:8000)
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-    # Render assigns dynamic port via $PORT (Render defaults to 10000, local dev defaults to 8000)
+    # Local presentation laptop server entry point on 0.0.0.0:8000
     port = int(os.environ.get("PORT", 8000))
-    logger.info(f"[BOOT] Starting Uvicorn on 0.0.0.0:{port}...")
-    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
+    logger.info(f"[BOOT] Starting local FastAPI Brain server on 0.0.0.0:{port}...")
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=True)

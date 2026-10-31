@@ -64,19 +64,12 @@ export default function App() {
     localStorage.setItem('roboarm_theme', nextTheme);
   };
 
-  // Connection & Cloud Configuration (Vite env vars + localStorage fallback)
-  const defaultCamUrl = (import.meta.env.VITE_CAM_URL as string) || '';
-  const defaultWsBackend = (import.meta.env.VITE_WS_BACKEND_URL as string) || (
-    typeof window !== 'undefined'
-      ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.hostname}:8000/ws`
-      : 'ws://localhost:8000/ws'
-  );
-
-  const [esp32Ip, setEsp32Ip] = useState<string>(() => {
-    return localStorage.getItem('roboarm_esp32_ip') || defaultCamUrl || '';
+  // Dynamic Connection URLs (Vercel Hybrid Setup: configurable for local Wi-Fi / IP shifts)
+  const [fastApiBrainUrl, setFastApiBrainUrl] = useState<string>(() => {
+    return localStorage.getItem('roboarm_fastapi_brain_url') || 'ws://localhost:8000/ws';
   });
-  const [backendWsUrl, setBackendWsUrl] = useState<string>(() => {
-    return localStorage.getItem('roboarm_backend_ws') || defaultWsBackend;
+  const [cameraStreamUrl, setCameraStreamUrl] = useState<string>(() => {
+    return localStorage.getItem('roboarm_camera_stream_url') || 'http://192.168.1.100:81/stream';
   });
   const [showConfig, setShowConfig] = useState(false);
 
@@ -153,16 +146,16 @@ export default function App() {
   ]);
   const [aiOverlayEnabled, setAiOverlayEnabled] = useState<boolean>(true);
 
-  // Save IP to localStorage
-  const handleSaveIp = (ip: string) => {
-    setEsp32Ip(ip);
-    localStorage.setItem('roboarm_esp32_ip', ip);
+  // Save dynamic connection URLs to state and localStorage
+  const handleSaveCameraUrl = (url: string) => {
+    setCameraStreamUrl(url);
+    localStorage.setItem('roboarm_camera_stream_url', url);
     setStreamKey(Date.now());
   };
 
-  const handleSaveBackendWs = (url: string) => {
-    setBackendWsUrl(url);
-    localStorage.setItem('roboarm_backend_ws', url);
+  const handleSaveFastApiBrainUrl = (url: string) => {
+    setFastApiBrainUrl(url);
+    localStorage.setItem('roboarm_fastapi_brain_url', url);
   };
 
   // ---------------------------------------------------------------------------
@@ -180,13 +173,16 @@ export default function App() {
       wsRef.current.close();
     }
 
+    const targetUrl = fastApiBrainUrl.trim();
+    if (!targetUrl) return;
+
     try {
-      const socket = new WebSocket(backendWsUrl);
+      const socket = new WebSocket(targetUrl);
       wsRef.current = socket;
 
       socket.onopen = () => {
         setWsConnected(true);
-        console.log('[WS] Connected to FastAPI Brain:', backendWsUrl);
+        console.log('[WS] Connected to FastAPI Brain:', targetUrl);
       };
 
       socket.onclose = () => {
@@ -265,7 +261,7 @@ export default function App() {
     } catch (e) {
       console.error('[WS Setup Error]', e);
     }
-  }, [backendWsUrl]);
+  }, [fastApiBrainUrl]);
 
   useEffect(() => {
     connectWebSocket();
@@ -432,21 +428,31 @@ export default function App() {
     }
   };
 
-  // Video URL generator (Auto-detects full HTTPS/Ngrok URLs or raw IPs)
+  // Camera Video URL generator (Handles full http/https URLs or raw IP addresses)
   const buildVideoUrl = (rawTarget: string, key: number): string | null => {
     if (!rawTarget) return null;
     const trimmed = rawTarget.trim();
     if (!trimmed) return null;
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      const url = trimmed.endsWith('/stream') ? trimmed : `${trimmed.replace(/\/+$/, '')}/stream`;
-      return `${url}?key=${key}`;
+
+    let base = trimmed;
+    // If user provided just an IP or hostname without protocol (e.g. 192.168.1.100)
+    if (!base.startsWith('http://') && !base.startsWith('https://')) {
+      if (base.includes(':81')) {
+        base = `http://${base}`;
+      } else {
+        base = `http://${base}:81/stream`;
+      }
     }
-    // Protocol matching: default to secure https if client is on HTTPS, else http
-    const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'https:' : 'http:';
-    return `${protocol}//${trimmed}:81/stream?key=${key}`;
+    // Append stream path if omitted
+    if (!base.endsWith('/stream') && !base.includes('/stream?') && !base.includes('?')) {
+      base = `${base.replace(/\/+$/, '')}/stream`;
+    }
+
+    const separator = base.includes('?') ? '&' : '?';
+    return `${base}${separator}key=${key}`;
   };
 
-  const videoStreamUrl = buildVideoUrl(esp32Ip, streamKey);
+  const videoStreamUrl = buildVideoUrl(cameraStreamUrl, streamKey);
 
   // ---------------------------------------------------------------------------
   // Simulation Helpers for Hackathon Testing / Demo
@@ -681,7 +687,7 @@ export default function App() {
               </span>
             </button>
 
-            {/* IP / Settings Trigger */}
+            {/* Connection Settings Trigger */}
             <button
               onClick={() => setShowConfig(!showConfig)}
               className={`p-2.5 rounded-xl border text-xs flex items-center gap-2 transition-all duration-200 cursor-pointer ${
@@ -689,10 +695,12 @@ export default function App() {
                   ? 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-sm'
                   : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300'
               }`}
-              title="ESP32 IP & WebSocket Settings"
+              title="FastAPI Brain & Camera Stream Settings"
             >
               <Settings2 className="w-4 h-4 text-sky-500" />
-              <span className="hidden sm:inline font-mono text-[11px] font-semibold">{esp32Ip}</span>
+              <span className="hidden sm:inline font-mono text-[11px] font-semibold">
+                Network Settings
+              </span>
             </button>
 
             {/* Persistent Global Emergency Stop Button */}
@@ -710,69 +718,89 @@ export default function App() {
           </div>
         </div>
 
-        {/* IP & WebSocket Config Dropdown Drawer */}
+        {/* Connection Settings Dropdown Drawer (Hybrid Vercel + Local Laptop Setup) */}
         {showConfig && (
           <div
-            className={`mt-3.5 pt-3.5 border-t max-w-7xl mx-auto flex flex-wrap items-center gap-4 text-xs animate-in fade-in slide-in-from-top-2 duration-300 ${
+            className={`mt-3.5 pt-3.5 border-t max-w-7xl mx-auto space-y-3.5 animate-in fade-in slide-in-from-top-2 duration-300 ${
               isLight ? 'border-slate-200 text-slate-700' : 'border-white/10 text-slate-300'
             }`}
           >
-            <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border ${
-                isLight ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'
-              }`}
-            >
-              <span className="font-medium">ESP32-CAM (Port 81 / Ngrok):</span>
-              <input
-                type="text"
-                value={esp32Ip}
-                onChange={(e) => handleSaveIp(e.target.value)}
-                placeholder="https://abc.ngrok-free.app or 192.168.1.100"
-                className={`border rounded-lg px-2.5 py-1 font-mono font-semibold outline-none w-52 text-xs transition ${
-                  isLight
-                    ? 'bg-white border-slate-300 text-sky-700 focus:border-sky-500'
-                    : 'bg-black/60 border-white/15 text-cyan-300 focus:border-cyan-400'
+            <div className="flex flex-wrap items-center gap-4 text-xs">
+              {/* Field 1: FastAPI Brain URL */}
+              <div
+                className={`flex items-center gap-2.5 px-3 py-2 rounded-xl border flex-1 min-w-[300px] ${
+                  isLight ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'
                 }`}
-              />
+              >
+                <span className="font-semibold whitespace-nowrap">FastAPI Brain URL:</span>
+                <input
+                  type="text"
+                  value={fastApiBrainUrl}
+                  onChange={(e) => handleSaveFastApiBrainUrl(e.target.value)}
+                  placeholder="ws://localhost:8000/ws or ws://192.168.x.x:8000/ws"
+                  className={`border rounded-lg px-2.5 py-1 font-mono font-semibold outline-none flex-1 text-xs transition ${
+                    isLight
+                      ? 'bg-white border-slate-300 text-sky-700 focus:border-sky-500'
+                      : 'bg-black/60 border-white/15 text-cyan-300 focus:border-cyan-400'
+                  }`}
+                />
+              </div>
+
+              {/* Field 2: Camera Stream URL */}
+              <div
+                className={`flex items-center gap-2.5 px-3 py-2 rounded-xl border flex-1 min-w-[300px] ${
+                  isLight ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'
+                }`}
+              >
+                <span className="font-semibold whitespace-nowrap">Camera Stream URL:</span>
+                <input
+                  type="text"
+                  value={cameraStreamUrl}
+                  onChange={(e) => handleSaveCameraUrl(e.target.value)}
+                  placeholder="http://192.168.x.x:81/stream"
+                  className={`border rounded-lg px-2.5 py-1 font-mono font-semibold outline-none flex-1 text-xs transition ${
+                    isLight
+                      ? 'bg-white border-slate-300 text-sky-700 focus:border-sky-500'
+                      : 'bg-black/60 border-white/15 text-cyan-300 focus:border-cyan-400'
+                  }`}
+                />
+              </div>
+
+              {/* Reconnect & Refresh Button */}
+              <button
+                onClick={() => {
+                  setStreamKey(Date.now());
+                  connectWebSocket();
+                }}
+                className={`px-4 py-2 rounded-xl flex items-center gap-2 transition-all shadow-sm font-semibold cursor-pointer border text-xs shrink-0 ${
+                  isLight
+                    ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'
+                    : 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/30'
+                }`}
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Reconnect &amp; Refresh</span>
+              </button>
             </div>
 
+            {/* Mixed Content Warning Note for Vercel Deployment */}
             <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border ${
-                isLight ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'
-              }`}
-            >
-              <span className="font-medium">FastAPI WS (Render / Local):</span>
-              <input
-                type="text"
-                value={backendWsUrl}
-                onChange={(e) => handleSaveBackendWs(e.target.value)}
-                placeholder="wss://roboarm-backend.onrender.com/ws/client"
-                className={`border rounded-lg px-2.5 py-1 font-mono font-semibold outline-none w-64 text-xs transition ${
-                  isLight
-                    ? 'bg-white border-slate-300 text-sky-700 focus:border-sky-500'
-                    : 'bg-black/60 border-white/15 text-cyan-300 focus:border-cyan-400'
-                }`}
-              />
-            </div>
-
-            <button
-              onClick={() => {
-                setStreamKey(Date.now());
-                connectWebSocket();
-              }}
-              className={`px-3.5 py-1.5 rounded-xl flex items-center gap-1.5 transition-all shadow-sm font-semibold cursor-pointer border ${
+              className={`p-3 rounded-xl border flex items-start gap-2.5 text-xs ${
                 isLight
-                  ? 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'
-                  : 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 hover:bg-cyan-500/30'
+                  ? 'bg-amber-50/90 border-amber-200 text-amber-900 shadow-sm'
+                  : 'bg-amber-500/10 border-amber-500/30 text-amber-200'
               }`}
             >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Reconnect &amp; Refresh Video</span>
-            </button>
-
-            <span className={`text-[11px] font-mono ${isLight ? 'text-slate-400' : 'text-slate-400'}`}>
-              Render Deploy: <code className="text-cyan-400">render.yaml</code> Blueprint ready
-            </span>
+              <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <span className="font-bold tracking-wide text-amber-600 dark:text-amber-400 block text-[11px] uppercase">
+                  Vercel Mixed Content Notice
+                </span>
+                <p className="text-[12px] leading-relaxed">
+                  Note: If connecting to local IPs from Vercel, you must allow 'Insecure Content' in your browser site settings.
+                </p>
+              </div>
+            </div>
           </div>
         )}
       </header>

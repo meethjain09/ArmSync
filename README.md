@@ -23,11 +23,11 @@ An end-to-end IoT and robotics system featuring real-time kinematic teleoperatio
   - [Step 4: Optional Tier 1C Vision Sorter](#step-4-optional-tier-1c-vision-sorter)
 - [API Contract & JSON Protocol](#api-contract--json-protocol)
 - [Safety Mechanisms](#safety-mechanisms)
-- [Cloud Deployment Guide (Render.com)](#cloud-deployment-guide-rendercom)
-  - [1. Render Blueprint One-Click Deployment (render.yaml)](#1-render-blueprint-one-click-deployment-renderyaml)
-  - [2. Manual Render Service Configuration](#2-manual-render-service-configuration)
-  - [3. Local Hardware Tunneling via Ngrok](#3-local-hardware-tunneling-via-ngrok)
-  - [4. Environment Variables & SSL Security](#4-environment-variables--ssl-security)
+- [Hybrid Deployment Guide (Vercel + Local Presentation Laptop)](#hybrid-deployment-guide-vercel--local-presentation-laptop)
+  - [1. Deploy React Frontend to Vercel](#1-deploy-react-frontend-to-vercel)
+  - [2. Run Python FastAPI Brain Locally](#2-run-python-fastapi-brain-locally)
+  - [3. Dynamic In-App Settings & Network Configuration](#3-dynamic-in-app-settings--network-configuration)
+  - [4. Handling Browser Mixed Content Policies](#4-handling-browser-mixed-content-policies)
 
 ---
 
@@ -307,9 +307,12 @@ Broadcast periodically every 200ms (5Hz).
 
 ---
 
-## Cloud Deployment Guide (Render.com)
+## Hybrid Deployment Guide (Vercel + Local Presentation Laptop)
 
-This repository is pre-configured for deployment on **Render.com** for cloud-hosted robotics teleoperation. Render provides native WebSocket support (`wss://`), zero-config TLS termination, automatic branch previews, and a generous free tier.
+This project utilizes a **Hybrid Deployment Topology** optimized for competitive hackathons:
+- **Cloud Layer:** The React 19 + Vite dashboard is deployed to **Vercel** as a high-performance global Single Page Application (SPA).
+- **Edge Layer:** The Python FastAPI Brain runs directly on your **physical presentation laptop** (`0.0.0.0:8000`), bridging commands to the local ESP8266 NodeMCU on Port 82.
+- **Dynamic Configuration:** Laptop and hardware IPs change frequently on venue Wi-Fi networks. The React frontend features dynamic in-app URL configuration persisted in `localStorage`.
 
 ```
                               +-------------------------------------------+
@@ -335,86 +338,77 @@ This repository is pre-configured for deployment on **Render.com** for cloud-hos
             +-----------------------------------------+
 ```
 
-### 1. Render Blueprint One-Click Deployment (`render.yaml`)
+### 1. Deploy React Frontend to Vercel
 
-The repository includes a root `render.yaml` Infrastructure-as-Code Blueprint defining both required services:
+1. **Push Code to GitHub:**
+   ```bash
+   git add .
+   git commit -m "feat: hybrid deployment with dynamic settings"
+   git push origin main
+   ```
 
-1. Push this repository to your **GitHub** account.
-2. Log into [Render Dashboard](https://dashboard.render.com).
-3. Click **New +** &rarr; **Blueprint**.
-4. Connect your GitHub repository.
-5. Render reads `render.yaml` and provisions:
-   - **`roboarm-backend`**: Python FastAPI Web Service (`Python 3.10.12`).
-   - **`roboarm-dashboard`**: React 19 + Vite Static Site (with SPA client-side rewrite).
-6. Click **Apply**.
+2. **Import Project into Vercel:**
+   - Go to [vercel.com/new](https://vercel.com/new) and connect your GitHub repository.
+   - **Framework Preset:** Vite
+   - **Root Directory:** `./`
+   - **Build Command:** `npm run build`
+   - **Output Directory:** `dist`
 
----
-
-### 2. Manual Render Service Configuration
-
-If creating the services manually in the Render UI:
-
-#### Service 1: Backend Web Service (`roboarm-backend`)
-- **Type:** Web Service
-- **Runtime:** `Python 3`
-- **Build Command:**
-  ```bash
-  pip install -r requirements.txt
-  ```
-- **Start Command:**
-  ```bash
-  uvicorn server:app --host 0.0.0.0 --port $PORT
-  ```
-- **Health Check Path:** `/api/health`
-- **Environment Variables:**
-  - `PYTHON_VERSION`: `3.10.12`
-  - `PORT`: `10000` *(Render sets dynamic `$PORT` automatically)*
-  - `ESP32_HOST`: `https://<your-nodemcu-ngrok-domain>.ngrok-free.app`
-  - `ESP32_WS_PORT`: `82`
-
-#### Service 2: Frontend Static Site (`roboarm-dashboard`)
-- **Type:** Static Site
-- **Build Command:**
-  ```bash
-  npm install && npm run build
-  ```
-- **Publish Directory:** `./dist`
-- **Redirects / Rewrites:**
-  - Add Rewrite: Source `/*` &rarr; Destination `/index.html` (Status: `Rewrite`)
-- **Environment Variables:**
-  - `VITE_WS_BACKEND_URL`: `wss://roboarm-backend.onrender.com/ws/client`
-  - `VITE_CAM_URL`: `https://<your-esp32cam-ngrok-domain>.ngrok-free.app`
+3. Click **Deploy**. Your dashboard will be live at `https://<your-project>.vercel.app`.
 
 ---
 
-### 3. Local Hardware Tunneling via Ngrok
+### 2. Run Python FastAPI Brain Locally
 
-Because microcontrollers run on your local Wi-Fi LAN (`192.168.x.x`), cloud services on Render cannot reach them directly. Use **Ngrok** on your physical presentation laptop to securely expose both ports:
+On your presentation laptop connected to the same local Wi-Fi router or hotspot as the microcontrollers:
 
-```bash
-# Terminal 1: Expose ESP8266 NodeMCU WebSocket Kinematics (Port 82)
-ngrok http 82
+1. **Install Dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-# Terminal 2: Expose ESP32-CAM MJPEG Video Stream (Port 81)
-ngrok http 81
-```
+2. **Set Hardware IP & Launch Server:**
+   ```bash
+   # Set the local IP of your ESP8266 NodeMCU
+   export ESP8266_HOST="192.168.1.100"
+   export ESP8266_WS_PORT="82"
 
-Ngrok outputs forwarding URLs, for example:
-- **NodeMCU:** `https://nodemcu-abc123.ngrok-free.app` &rarr; `http://localhost:82`
-- **ESP32-CAM:** `https://esp32cam-xyz789.ngrok-free.app` &rarr; `http://localhost:81`
+   # Launch FastAPI server bound to all local network interfaces on Port 8000
+   python server.py
+   ```
+   *Uvicorn starts on `http://0.0.0.0:8000` with fully permissive CORS enabled (`allow_origins=["*"]`), allowing requests from your Vercel domain.*
+
+3. **Find Your Laptop's Local IP Address:**
+   - **macOS/Linux:** `ifconfig | grep "inet " | grep -v 127.0.0.1`
+   - **Windows:** `ipconfig` (look for IPv4 Address, e.g., `192.168.1.50`)
 
 ---
 
-### 4. Environment Variables & SSL Security
+### 3. Dynamic In-App Settings & Network Configuration
 
-1. **Map Ngrok URLs into Render:**
-   - In Render Dashboard under **`roboarm-backend` &rarr; Environment**:
-     Set `ESP32_HOST = https://nodemcu-abc123.ngrok-free.app`
-   - In Render Dashboard under **`roboarm-dashboard` &rarr; Environment**:
-     Set `VITE_WS_BACKEND_URL = wss://roboarm-backend.onrender.com/ws/client`
-     Set `VITE_CAM_URL = https://esp32cam-xyz789.ngrok-free.app`
+When accessing your Vercel frontend from any device (laptop, tablet, phone):
 
-2. **Zero Mixed-Content Blocking:**
-   - Browsers block insecure `http://` or `ws://` connections when visiting an `https://` site.
-   - Because Render terminates SSL automatically and Ngrok issues signed HTTPS certificates, the browser communicates purely through `wss://` (WebSockets) and `https://` (camera feed), guaranteeing seamless playback on all browsers and mobile devices.
+1. Click the **Network Settings** button (gear icon) in the top-right header.
+2. Enter your live venue network connection parameters:
+   - **FastAPI Brain URL:**
+     - If viewing dashboard on the same laptop: `ws://localhost:8000/ws`
+     - If viewing dashboard on another device (or phone): `ws://192.168.x.x:8000/ws`
+   - **Camera Stream URL:**
+     - The local IP of your ESP32-CAM: `http://192.168.x.x:81/stream`
+3. Click **Reconnect & Refresh**. The URLs are instantly stored in `localStorage` and will persist across browser reloads.
+
+---
+
+### 4. Handling Browser Mixed Content Policies
+
+Because Vercel serves the web dashboard over secure **HTTPS** (`https://...`), modern browsers enforce strict "Mixed Content" security policies that initially block connections to insecure local network endpoints (`ws://` and `http://`).
+
+#### How to Allow Insecure Content:
+
+1. In your browser (Chrome, Edge, Brave), click the **Site Settings / Lock / Tune icon** to the left of the URL bar (`https://<your-project>.vercel.app`).
+2. Click **Site settings**.
+3. Scroll down to **Insecure content** and change the setting from *Block (default)* to **Allow**.
+4. Return to the dashboard and reload the page.
+
+*Both the local WebSocket telemetry stream and the live camera MJPEG feed will now connect flawlessly without requiring external tunnels or cloud relays.*
 
