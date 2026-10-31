@@ -175,14 +175,11 @@ async def esp32_bridge_worker():
             async with websockets.connect(ESP32_WS_URL, ping_interval=None) as ws:
                 state.esp32_ws_client = ws
                 state.esp32_connected = True
-                logger.info("[BRIDGE] Successfully connected to ESP32-CAM!")
-
-                # Send an initial ping/keepalive immediately
-                await ws.send(json.dumps({"command": "PING"}))
+                logger.info("[BRIDGE] Successfully connected to Muscle Board!")
 
                 while True:
                     try:
-                        raw_msg = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                        raw_msg = await ws.recv()
                         data = json.loads(raw_msg)
 
                         # Update cached telemetry
@@ -213,10 +210,8 @@ async def esp32_bridge_worker():
                         elif state.active_mode == "1C":
                             asyncio.create_task(process_cv_tier_1c())
 
-                    except asyncio.TimeoutError:
-                        # Periodic 1-second heartbeat to keep the ESP32 2000ms watchdog alive
-                        if state.esp32_connected:
-                            await ws.send(json.dumps({"command": "PING"}))
+                    except json.JSONDecodeError:
+                        continue
 
         except (websockets.exceptions.ConnectionClosed, OSError) as e:
             state.esp32_connected = False
@@ -362,11 +357,12 @@ async def frontend_websocket_endpoint(websocket: WebSocket):
                 await broadcast_to_frontends({"type": "ESTOP_TRIGGERED"})
                 continue
 
-            # Command: Manual Move (Tier 1A only)
+            # Command: Move / Hardware Unlock
             if cmd.get("command") == "MOVE":
-                if state.active_mode == "1A":
-                    # Forward directly to ESP32
-                    await send_to_esp32(cmd)
+                if state.active_mode == "1A" or cmd.get("is_reset") or state.latest_esp32_status == "stopped":
+                    # Forward directly to ESP to unlock hardware E-Stop
+                    state.latest_esp32_status = "idle"
+                    await send_to_esp32({k: v for k, v in cmd.items() if k != "is_reset"})
                 else:
                     await websocket.send_text(json.dumps({
                         "type": "WARNING",

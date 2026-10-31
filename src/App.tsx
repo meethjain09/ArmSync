@@ -163,6 +163,7 @@ export default function App() {
   // ---------------------------------------------------------------------------
   const sendWebSocketMessage = useCallback((payload: Record<string, any>) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      console.log('WS Payload:', JSON.stringify(payload));
       wsRef.current.send(JSON.stringify(payload));
     }
   }, []);
@@ -215,9 +216,6 @@ export default function App() {
             }
             if (data.esp32.status) {
               setEsp32Status(data.esp32.status);
-              if (data.esp32.status === 'stopped') {
-                setIsEStopped(true);
-              }
             }
             if (data.is_executing_sequence !== undefined) {
               setIsExecutingSequence(data.is_executing_sequence);
@@ -243,10 +241,10 @@ export default function App() {
             });
           }
 
-          // Emergency Stop alert
+          // Emergency Stop alert (Only if explicit user STOP triggered)
           if (data.type === 'ESTOP_TRIGGERED') {
             setIsEStopped(true);
-            setEStopReason('Hardware / Software E-Stop Triggered');
+            setEStopReason('Emergency Stop Triggered');
           }
 
           // External Mode Switch
@@ -283,13 +281,25 @@ export default function App() {
   const handleClearEStop = () => {
     setIsEStopped(false);
     setEStopReason('');
-    // Resend current angles to clear halt latch
+    setEsp32Status('idle');
+
+    // Update frontend joint setpoints to home pose
+    const homePose: JointAngles = {
+      base: 90,
+      shoulder: 90,
+      elbow: 90,
+      gripper: 30,
+    };
+    setJoints(homePose);
+    lastSentJoints.current = homePose;
+
+    // Send explicit MOVE command to force hardware to unlock its E-Stop latch and return to home
     sendWebSocketMessage({
       command: 'MOVE',
-      base: joints.base,
-      shoulder: joints.shoulder,
-      elbow: joints.elbow,
-      gripper: joints.gripper,
+      base: 90,
+      shoulder: 90,
+      elbow: 90,
+      gripper: 30,
     });
   };
 
@@ -315,19 +325,36 @@ export default function App() {
   // Throttled Manual Servo Dispatches (Tab 1A)
   // ---------------------------------------------------------------------------
   const dispatchJoints = useCallback(
-    (newJoints: JointAngles) => {
+    (newJoints: JointAngles, immediate: boolean = false) => {
       if (isEStopped) return;
 
       lastSentJoints.current = newJoints;
+
+      const unifiedPayload = {
+        command: 'MOVE',
+        base: Math.round(Number(newJoints.base)),
+        shoulder: Math.round(Number(newJoints.shoulder)),
+        elbow: Math.round(Number(newJoints.elbow)),
+        gripper: Math.round(Number(newJoints.gripper)),
+      };
+
+      if (immediate) {
+        if (throttleTimeoutRef.current) {
+          clearTimeout(throttleTimeoutRef.current);
+          throttleTimeoutRef.current = null;
+        }
+        sendWebSocketMessage(unifiedPayload);
+        return;
+      }
 
       if (!throttleTimeoutRef.current) {
         throttleTimeoutRef.current = setTimeout(() => {
           sendWebSocketMessage({
             command: 'MOVE',
-            base: lastSentJoints.current.base,
-            shoulder: lastSentJoints.current.shoulder,
-            elbow: lastSentJoints.current.elbow,
-            gripper: lastSentJoints.current.gripper,
+            base: Math.round(Number(lastSentJoints.current.base)),
+            shoulder: Math.round(Number(lastSentJoints.current.shoulder)),
+            elbow: Math.round(Number(lastSentJoints.current.elbow)),
+            gripper: Math.round(Number(lastSentJoints.current.gripper)),
           });
           throttleTimeoutRef.current = null;
         }, 50); // 20Hz update rate
@@ -337,7 +364,7 @@ export default function App() {
   );
 
   const handleJointChange = (joint: keyof JointAngles, value: number) => {
-    const updated = { ...joints, [joint]: value };
+    const updated = { ...joints, [joint]: Math.round(Number(value)) };
     setJoints(updated);
     if (activeMode === '1A') {
       dispatchJoints(updated);
@@ -345,14 +372,56 @@ export default function App() {
   };
 
   const toggleGripper = () => {
-    const nextAngle = joints.gripper === 30 ? 135 : 30;
-    handleJointChange('gripper', nextAngle);
+    if (isEStopped) return;
+
+    // Use latest state from lastSentJoints.current or joints to prevent stale closure
+    const currentGripper = lastSentJoints.current.gripper;
+    const nextAngle: number = currentGripper === 30 ? 90 : 30;
+
+    // Build the guaranteed fresh unified state
+    const nextJoints: JointAngles = {
+      base: Math.round(Number(lastSentJoints.current.base)),
+      shoulder: Math.round(Number(lastSentJoints.current.shoulder)),
+      elbow: Math.round(Number(lastSentJoints.current.elbow)),
+      gripper: nextAngle,
+    };
+
+    // Update synchronous ref FIRST so subsequent slider events immediately inherit the new gripper value
+    lastSentJoints.current = nextJoints;
+
+    // Clear any pending throttle timers to avoid overwriting with a stale payload
+    if (throttleTimeoutRef.current) {
+      clearTimeout(throttleTimeoutRef.current);
+      throttleTimeoutRef.current = null;
+    }
+
+    // Update React state
+    setJoints(nextJoints);
+
+    // Direct, immediate dispatch using the freshly computed value (never relying on async React re-render)
+    const payload = {
+      command: 'MOVE',
+      base: nextJoints.base,
+      shoulder: nextJoints.shoulder,
+      elbow: nextJoints.elbow,
+      gripper: nextJoints.gripper,
+    };
+
+    if (activeMode === '1A') {
+      sendWebSocketMessage(payload);
+    }
   };
 
   const applyPosePreset = (preset: { base: number; shoulder: number; elbow: number; gripper: number }) => {
-    setJoints(preset);
+    const cleanPreset: JointAngles = {
+      base: Math.round(Number(preset.base)),
+      shoulder: Math.round(Number(preset.shoulder)),
+      elbow: Math.round(Number(preset.elbow)),
+      gripper: Math.round(Number(preset.gripper)),
+    };
+    setJoints(cleanPreset);
     if (activeMode === '1A') {
-      dispatchJoints(preset);
+      dispatchJoints(cleanPreset, true);
     }
   };
 
@@ -1113,7 +1182,7 @@ export default function App() {
                         End-Effector Gripper
                       </span>
                       <span className="text-[11px] text-slate-400 font-mono">
-                        Current: {joints.gripper === 30 ? '30° (Open)' : '135° (Grip)'}
+                        Current: {joints.gripper === 30 ? '30° (Open)' : '90° (Grip)'}
                       </span>
                     </div>
 

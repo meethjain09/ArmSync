@@ -73,11 +73,8 @@ const unsigned long SMOOTHING_INTERVAL_MS = 15;
 unsigned long prevStepMillis = 0;
 
 // ----------------------------------------------------------------------------
-// 4. Safety Watchdog & Telemetry Timing
+// 4. Manual Safety & Telemetry Timing
 // ----------------------------------------------------------------------------
-// Heartbeat timeout: Auto E-Stop if 2000ms elapse without a packet from backend
-const unsigned long HEARTBEAT_TIMEOUT_MS = 2000;
-unsigned long last_ping_time = 0;
 bool isSystemHalted = false;
 String armStatus = "idle";
 
@@ -124,25 +121,55 @@ void setup() {
   motorGripper.write(jointGripper.currentDeg);
   Serial.println("[MOTORS] Servos initialized at neutral pose.");
 
-  // 3. Connect to Wi-Fi
-  WiFi.mode(WIFI_STA);
+  // 3. Robust Wi-Fi Initialization for ESP8266
+  WiFi.persistent(false);       // Avoid saving every attempt to flash wear
+  WiFi.disconnect(true);        // Clear any old/corrupted DHCP leases
+  delay(200);
+
+  WiFi.mode(WIFI_STA);          // Ensure pure Station client mode
+  WiFi.setSleepMode(WIFI_NONE_SLEEP); // Prevent Wi-Fi radio from power-cycling
+  WiFi.setAutoReconnect(true);
+
+  Serial.printf("\n[WIFI] Connecting to SSID: '%s'...\n", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.printf("[WIFI] Connecting to %s", WIFI_SSID);
+
+  int attempts = 0;
   while (WiFi.status() != WL_CONNECTED) {
-    delay(400);
+    delay(500);
     Serial.print(".");
+    attempts++;
+
+    // Print specific status code every 10 attempts (5 seconds)
+    if (attempts % 10 == 0) {
+      Serial.printf(" [Status code: %d", WiFi.status());
+      switch (WiFi.status()) {
+        case WL_NO_SSID_AVAIL:   Serial.print(" - SSID Not Found (Check 2.4GHz network)]\n"); break;
+        case WL_CONNECT_FAILED:  Serial.print(" - Password/Connection Failed]\n"); break;
+        case WL_DISCONNECTED:    Serial.print(" - Still Disconnected]\n"); break;
+        case WL_IDLE_STATUS:     Serial.print(" - Radio Idle]\n"); break;
+        default:                 Serial.print("]\n"); break;
+      }
+    }
+
+    // Safety fallback: re-issue begin if stuck for more than 30 seconds
+    if (attempts >= 60) {
+      Serial.println("\n[WIFI] Timeout reached. Retrying WiFi.begin()...");
+      WiFi.disconnect();
+      delay(200);
+      WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+      attempts = 0;
+    }
   }
+
   Serial.println("\n[WIFI] Connected successfully!");
-  Serial.print("[WIFI] Muscle Node IP Address: ");
+  Serial.print("[WIFI] NodeMCU Assigned IP: ");
   Serial.println(WiFi.localIP());
+  Serial.printf("[WIFI] Signal Strength (RSSI): %d dBm\n", WiFi.RSSI());
 
   // 4. Start WebSocket Server on Port 82
   wsServer.begin();
   wsServer.onEvent(onWebSocketEvent);
   Serial.printf("[WS] Muscle Server listening on ws://%s:82/\n", WiFi.localIP().toString().c_str());
-
-  // Prime watchdog timer
-  last_ping_time = millis();
 }
 
 // ============================================================================
@@ -154,12 +181,7 @@ void loop() {
   // 1. Service WebSocket protocol events
   wsServer.loop();
 
-  // 2. 2000ms Watchdog Connection Loss Failsafe
-  if (!isSystemHalted && (now - last_ping_time > HEARTBEAT_TIMEOUT_MS)) {
-    triggerEmergencyStop("WATCHDOG_HEARTBEAT_LOSS");
-  }
-
-  // 3. 15ms Motion Smoothing Loop (1-degree incremental interpolation)
+  // 2. 15ms Motion Smoothing Loop (1-degree incremental interpolation)
   if (!isSystemHalted && (now - prevStepMillis >= SMOOTHING_INTERVAL_MS)) {
     prevStepMillis = now;
     updateServos();
@@ -264,7 +286,6 @@ void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t leng
   switch (type) {
     case WStype_CONNECTED:
       Serial.printf("[WS] Client #%u connected\n", num);
-      last_ping_time = millis(); // Refresh watchdog on connection
       break;
 
     case WStype_DISCONNECTED:
@@ -272,10 +293,7 @@ void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t leng
       break;
 
     case WStype_TEXT: {
-      // 1. Refresh watchdog timer on any valid incoming payload
-      last_ping_time = millis();
-
-      // 2. Parse JSON Command
+      // Parse JSON Command
       StaticJsonDocument<256> doc;
       DeserializationError err = deserializeJson(doc, payload, length);
       if (err) return;
